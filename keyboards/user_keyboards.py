@@ -7,11 +7,12 @@ def create_main_menu() -> ReplyKeyboardMarkup:
     button_meme = KeyboardButton(text=LEXICON['meme_button'])
     button_top = KeyboardButton(text=LEXICON['top_button'])
     button_add_meme = KeyboardButton(text=LEXICON['add_meme_button'])
+    button_random_meme = KeyboardButton(text=LEXICON['random_meme_button'])
 
     return ReplyKeyboardMarkup(
         keyboard=[
         [button_meme, button_top],
-        [button_add_meme]
+        [button_add_meme, button_random_meme]
         ],
         resize_keyboard=True
     )

@@ -93,3 +93,12 @@ async def get_top_contributors() -> list[dict]:
         ''') as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+        
+async def get_random_meme() -> dict | None:
+    """Возвращает случайный мем из базы данных."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Сортируем по RANDOM() и берем 1 строчку
+        async with db.execute('SELECT title, file_id FROM memes ORDER BY RANDOM() LIMIT 1') as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

@@ -7,7 +7,8 @@ LEXICON: dict[str, str] = {
     'not_found': 'Мем не найден, возможно он был удален админом',
     'add_meme_instruction': 'Сначала отправь видео',
     'check_meme': 'твой мем отправлен на проверку админу!',
-    'top_button': 'Топ отправителей мемов',
+    'top_button': 'Статистика',
     'add_meme_button': 'Добавить мем',
     'back_button': 'Назад',
+    'random_meme_button': 'Мем дня'
 }

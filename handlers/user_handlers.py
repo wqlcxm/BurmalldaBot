@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from lexicons.lexicon import LEXICON
 from keyboards.user_keyboards import create_main_menu, create_memes_inline_keyboard, create_cancel_menu
 from keyboards.admin_keyboards import create_moderation_keyboard
-from database.db_core import get_all_memes, get_meme_by_id, ban_user, unban_user, get_top_contributors
+from database.db_core import get_all_memes, get_meme_by_id, ban_user, get_random_meme, unban_user, get_top_contributors
 from config_data.config import load_config
 
 router = Router()
@@ -227,3 +227,19 @@ async def process_top_command(message: Message):
         text += f"{medal} @{user['sender_username']} — <b>{user['meme_count']}</b> мемов\n"
         
     await message.answer(text)
+
+@router.message(Command("random"))
+@router.message(F.text == LEXICON['random_meme_button'])
+async def process_random_meme_command(message: Message):
+    # Получаем случайный мем из базы данных
+    meme = await get_random_meme()
+    
+    if not meme:
+        await message.answer("📦 В базе пока нет мемов. Будь первым, кто предложит годноту через /addmeme !")
+        return
+        
+    # Отправляем случайное видео юзеру
+    await message.answer_video(
+        video=meme['file_id'],
+        caption=f"🎲 Твой случайный мем дня:\n<b>{meme['title']}</b>"
+    )
