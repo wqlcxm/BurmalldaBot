@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from database.db_core import add_meme, ban_user
+from database.db_core import add_meme, ban_user, format_username
 from config_data.config import load_config
 
 router = Router()
@@ -47,7 +47,7 @@ async def process_moderation_choice(callback: CallbackQuery):
     await add_meme(title=title, file_id=file_id, sender_id=sender_id, sender_username=sender_username)
     
     await callback.message.edit_caption(
-        caption=f"💚 <b>МЕМ ОДОБРЕН И ДОБАВЛЕН!</b>\n\n<b>Название:</b> {title}\n<b>Автор:</b> @{sender_username}"
+        caption=f"💚 <b>МЕМ ОДОБРЕН И ДОБАВЛЕН!</b>\n\n<b>Название:</b> {title}\n<b>Автор:</b> {format_username(sender_username)}"
     )
 
 @router.callback_query(F.data.startswith("admin_ban_"))

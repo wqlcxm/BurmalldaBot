@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from lexicons.lexicon import LEXICON
 from keyboards.user_keyboards import create_main_menu, create_memes_inline_keyboard, create_cancel_menu
 from keyboards.admin_keyboards import create_moderation_keyboard
-from database.db_core import get_all_memes, get_meme_by_id, ban_user, get_random_meme, unban_user, get_top_contributors
+from database.db_core import get_all_memes, get_meme_by_id, ban_user, get_random_meme, unban_user, get_top_contributors, reset_top_contributors, format_username
 from config_data.config import load_config
 
 router = Router()
@@ -98,57 +98,20 @@ async def process_add_meme_title(message: Message, state: FSMContext, bot: Bot):
     
     await state.clear()
     await message.answer(LEXICON['check_meme'])
-    
+
+    username = message.from_user.username or f"id{message.from_user.id}"
     # Отправляем видео тебе в ЛС на модерацию
     await bot.send_video(
         chat_id=config.tg_bot.admin_id,
         video=file_id,
-        caption=f"<b>📢 Предложен новый мем!</b>\n\n<b>Название для кнопки:</b> {full_title}\n<b>Отправил:</b> @{message.from_user.username or 'без_юзернейма'} (ID: {message.from_user.id})",
-        reply_markup=create_moderation_keyboard(user_id=message.from_user.id)
+        caption=f"<b>📢 Предложен новый мем!</b>\n\n<b>Название для кнопки:</b> {full_title}\n<b>Отправил:</b> {format_username(username)} (ID: {message.from_user.id})",
+        reply_markup=create_moderation_keyboard(user_id=message.from_user.id, username=username)
     )
 
 # Если вместо видео юзер отправил текст или что-то не то
 @router.message(AddMemeState.upload_video)
 async def process_add_meme_video_invalid(message: Message):
     await message.answer("отправь именно **видеоролик**!")
-
-# Шаг 3: Юзер написал название. Отправляем админу
-@router.message(AddMemeState.type_title, F.text)
-async def process_add_meme_title(message: Message, state: FSMContext, bot: Bot):
-    user_title = message.text.strip()
-    user_data = await state.get_data()
-    file_id = user_data['file_id']
-    quality = user_data['video_quality']
-    
-    cleaned_title = re.sub(r'\s*\d{3,4}p\b', '', user_title, flags=re.IGNORECASE).strip()
-    full_title = f"{cleaned_title} {quality}"
-    
-    await state.clear()
-    await message.answer("🚀 Твой мем отправлен на проверку админу!")
-    
-    # Собираем данные юзера для админки
-    username = message.from_user.username or f"id{message.from_user.id}"
-    
-    # Изменим клавиатуру модерации: передадим в кнопки ID автора предложки
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    
-    moderation_kb = InlineKeyboardBuilder()
-    # Зашиваем ID автора и юзернейм прямо в callback_data кнопок через разделитель :
-    moderation_kb.row(
-        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"admin_accept:{message.from_user.id}:{username}"),
-        InlineKeyboardButton(text="❌ Отклонить", callback_data="admin_reject")
-    )
-    moderation_kb.row(
-        InlineKeyboardButton(text="🚫 Забанить автора", callback_data=f"admin_ban_{message.from_user.id}")
-    )
-
-    await bot.send_video(
-        chat_id=config.tg_bot.admin_id,
-        video=file_id,
-        caption=f"<b>📢 Предложен новый мем!</b>\n\n<b>Название для кнопки:</b> {full_title}\n<b>Отправил:</b> @{username} (ID: {message.from_user.id})",
-        reply_markup=moderation_kb.as_markup()
-    )
 
 # Если вместо названия кнопки юзер шлет стикеры/фото
 @router.message(AddMemeState.type_title)
@@ -178,6 +141,15 @@ async def process_admin_ban(callback: CallbackQuery):
         await callback.message.edit_caption(
             caption=callback.message.caption + f"\n\n🛑 <b>АВТОР ЗАБАНЕН ФОРЕВЕР!</b>"
         )
+
+@router.message(Command("reset_top"))
+async def process_reset_top_command(message: Message):
+    if message.from_user.id != config.tg_bot.admin_id:
+        return
+
+    await reset_top_contributors()
+    await message.reply("✅ Рейтинг пользователей очищен. Топ начнёт набираться заново.")
+
 
 @router.message(Command("unban"))
 async def process_unban_command(message: Message):
@@ -224,7 +196,7 @@ async def process_top_command(message: Message):
     
     for index, user in enumerate(top_users, start=1):
         medal = medals.get(index, f"{index}.")
-        text += f"{medal} @{user['sender_username']} — <b>{user['meme_count']}</b> мемов\n"
+        text += f"{medal} {format_username(user['sender_username'])} — <b>{user['meme_count']}</b> мемов\n"
         
     await message.answer(text)
 

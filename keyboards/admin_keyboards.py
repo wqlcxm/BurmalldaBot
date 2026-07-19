@@ -1,23 +1,18 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-def create_moderation_keyboard() -> InlineKeyboardMarkup:
-    """Кнопки для админа: одобрить или отклонить мем."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="✅ Одобрить", callback_data="admin_accept"),
-        InlineKeyboardButton(text="❌ Отклонить", callback_data="admin_reject")
-    )
-    return builder.as_markup()
+def create_moderation_keyboard(user_id: int, username: str | None = None) -> InlineKeyboardMarkup:
+    """Кнопки для админа с передачей авторских данных в callback_data."""
+    if not username:
+        callback_accept = "admin_accept"
+    else:
+        callback_accept = f"admin_accept:{user_id}:{username}"
 
-def create_moderation_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Кнопки для админа с возможностью забанить автора предложки."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ Одобрить", callback_data="admin_accept"),
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=callback_accept),
         InlineKeyboardButton(text="❌ Отклонить", callback_data="admin_reject")
     )
-    # Кнопка бана во второй ряд
     builder.row(
         InlineKeyboardButton(text="🚫 Забанить автора", callback_data=f"admin_ban_{user_id}")
     )
