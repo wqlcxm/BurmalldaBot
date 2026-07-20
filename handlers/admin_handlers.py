@@ -4,6 +4,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from database import db_core
 from database.db_core import (
     add_allowed_user,
     add_meme,
@@ -20,7 +21,11 @@ from lexicons.lexicon import LEXICON
 
 router = Router()
 config = load_config()
-DB_PATH = 'database/memes.db'
+DB_PATH = db_core.DB_PATH
+
+
+def get_db_path() -> str:
+    return db_core.DB_PATH
 
 
 def build_maintenance_menu_text(enabled: bool, allowed_users: list[int]) -> str:
@@ -496,7 +501,7 @@ async def admin_manage_memes(callback: CallbackQuery):
     limit = 5
     offset = page * limit
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         # Берем порцию мемов
         async with db.execute('SELECT id, title FROM memes LIMIT ? OFFSET ?', (limit, offset)) as cursor:
@@ -544,7 +549,7 @@ async def edit_meme_card(callback: CallbackQuery):
     await callback.answer()
     meme_id = int(callback.data.split("_")[1])
     
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute('SELECT title, file_id FROM memes WHERE id = ?', (meme_id,)) as cursor:
             meme = await cursor.fetchone()
@@ -569,7 +574,7 @@ async def edit_meme_card(callback: CallbackQuery):
 async def delete_meme_action(callback: CallbackQuery):
     meme_id = int(callback.data.split("_")[1])
     
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(get_db_path()) as db:
         await db.execute('DELETE FROM memes WHERE id = ?', (meme_id,))
         await db.commit()
         
@@ -599,7 +604,7 @@ async def rename_meme_finish(message: Message, state: FSMContext):
     await state.clear()
     
     # Обновляем в базе
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(get_db_path()) as db:
         await db.execute('UPDATE memes SET title = ? WHERE id = ?', (new_title, meme_id))
         await db.commit()
         

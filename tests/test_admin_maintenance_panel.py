@@ -4,6 +4,7 @@ import unittest
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ADMIN_ID", "1")
 
+from database import db_core
 from handlers import admin_handlers
 
 
@@ -13,6 +14,9 @@ class MaintenancePanelTests(unittest.TestCase):
 
         self.assertIn("Техработы: ВКЛЮЧЕНЫ", text)
         self.assertIn("Исключений: 2", text)
+
+    def test_admin_handlers_use_shared_database_path(self) -> None:
+        self.assertEqual(admin_handlers.DB_PATH, db_core.DB_PATH)
 
 
 if __name__ == "__main__":
