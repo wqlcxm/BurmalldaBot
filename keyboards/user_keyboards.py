@@ -8,11 +8,13 @@ def create_main_menu() -> ReplyKeyboardMarkup:
     button_top = KeyboardButton(text=LEXICON['top_button'])
     button_add_meme = KeyboardButton(text=LEXICON['add_meme_button'])
     button_random_meme = KeyboardButton(text=LEXICON['random_meme_button'])
+    button_about = KeyboardButton(text=LEXICON['about_button'])
 
     return ReplyKeyboardMarkup(
         keyboard=[
         [button_meme, button_top],
-        [button_add_meme, button_random_meme]
+        [button_add_meme, button_random_meme],
+        [button_about]
         ],
         resize_keyboard=True
     )
@@ -31,9 +33,10 @@ def create_memes_inline_keyboard(memes_list: list[dict]) -> InlineKeyboardMarkup
     builder = InlineKeyboardBuilder()
     
     for meme in memes_list:
+        views = meme.get('views', 0)
         # В callback_data зашиваем ID мема
         builder.row(InlineKeyboardButton(
-            text=meme['title'],
+            text=f"{meme['title']} 👁 {views}",
             callback_data=f"show_meme_{meme['id']}"
         ))
         

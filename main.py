@@ -1,8 +1,10 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties  # Добавили этот импорт
+from middlewares.maintenance import MaintenanceMiddleware
 from middlewares.shadow_ban import BanMiddleware
 from middlewares.check_sub import CheckSubscriptionMiddleware
+from middlewares.user_registration import UserRegistrationMiddleware
 from config_data.config import load_config
 from handlers import user_handlers, admin_handlers
 from database.db_core import init_db
@@ -22,11 +24,15 @@ async def main():
     
     dp = Dispatcher()
 
+    dp.message.middleware(MaintenanceMiddleware())
+    dp.callback_query.middleware(MaintenanceMiddleware())
     dp.message.middleware(BanMiddleware())
     dp.callback_query.middleware(BanMiddleware())
 
     dp.message.middleware(CheckSubscriptionMiddleware())
     dp.callback_query.middleware(CheckSubscriptionMiddleware())
+    dp.message.middleware(UserRegistrationMiddleware())
+    dp.callback_query.middleware(UserRegistrationMiddleware())
     
     dp.include_router(user_handlers.router)
     dp.include_router(admin_handlers.router)

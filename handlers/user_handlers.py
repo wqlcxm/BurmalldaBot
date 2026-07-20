@@ -1,6 +1,7 @@
 import re
 # import random
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -9,7 +10,19 @@ from aiogram.fsm.state import State, StatesGroup
 from lexicons.lexicon import LEXICON
 from keyboards.user_keyboards import create_main_menu, create_memes_inline_keyboard, create_cancel_menu
 from keyboards.admin_keyboards import create_moderation_keyboard
-from database.db_core import get_all_memes, get_meme_by_id, ban_user, get_random_meme, unban_user, get_top_contributors, reset_top_contributors, format_username
+from database.db_core import (
+    get_all_memes,
+    get_meme_by_id,
+    ban_user,
+    get_random_meme,
+    unban_user,
+    get_top_contributors,
+    reset_top_contributors,
+    format_username,
+    register_user,
+    increment_meme_views,
+    get_top_memes,
+)
 from config_data.config import load_config
 
 router = Router()
@@ -24,10 +37,12 @@ class AddMemeState(StatesGroup):
 @router.message(F.text == LEXICON['back_button'])
 async def process_start_command(message: Message, state: FSMContext):
     await state.clear()
+    await register_user(message.from_user.id, message.from_user.username)
     await message.answer(
         text=LEXICON['/start'],
         reply_markup=create_main_menu()
     )
+
 
 @router.message(F.text == LEXICON['meme_button'])
 async def process_meme_menu_request(message: Message):
@@ -45,11 +60,32 @@ async def process_meme_click(callback: CallbackQuery):
     if not meme:
         await callback.answer(LEXICON['not_found'], show_alert=True)
         return
+    await increment_meme_views(meme_id)
+    updated_meme = await get_meme_by_id(meme_id)
     await callback.answer()
     try:
-        await callback.message.answer_video(video=meme['file_id'], caption=f"🎬 <b>{meme['title']}</b>")
-    except Exception as e:
-        await callback.message.answer(text=LEXICON['error'])
+        chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+        await callback.bot.send_video(
+            chat_id=chat_id,
+            video=updated_meme['file_id'],
+            caption=f"🎬 <b>{updated_meme['title']}</b>\n\n👁️ Просмотров: {updated_meme.get('views', 0)}"
+        )
+    except TelegramBadRequest as exc:
+        if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():
+            await callback.bot.send_message(
+                chat_id=callback.message.chat.id if callback.message else callback.from_user.id,
+                text=LEXICON['meme_unavailable'].format(title=updated_meme['title'])
+            )
+        else:
+            await callback.bot.send_message(
+                chat_id=callback.message.chat.id if callback.message else callback.from_user.id,
+                text=LEXICON['error']
+            )
+    except Exception:
+        if callback.message:
+            await callback.message.answer(text=LEXICON['error'])
+        else:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=LEXICON['error'])
 
 # --- ПОШАГОВОЕ ДОБАВЛЕНИЕ МЕМА НА МОДЕРАЦИЮ ---
 
@@ -183,21 +219,27 @@ async def process_unban_command(message: Message):
 @router.message(Command("top"))
 @router.message(F.text == LEXICON['top_button'])
 async def process_top_command(message: Message):
+    top_memes = await get_top_memes(limit=3)
     top_users = await get_top_contributors()
-    
-    if not top_users:
-        await message.answer("🏆 Таблица лидеров пуста. Будь первым, кто предложит одобренный мем! Используй /addmeme")
+
+    if not top_memes and not top_users:
+        await message.answer("📦 В базе пока нет мемов — стань первым, кто добавит их через /addmeme")
         return
-        
-    text = "🏆 <b>ТОП-10 ОТПРАВИТЕЛЕЙ МЕМОВ:</b>\nЕсли написано @anon то у отправителя нету username\n\n"
-    
-    # Красивые медальки для первых трех мест
+
+    text = LEXICON['top_response']
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    
-    for index, user in enumerate(top_users, start=1):
+
+    for index, meme in enumerate(top_memes, start=1):
         medal = medals.get(index, f"{index}.")
-        text += f"{medal} {format_username(user['sender_username'])} — <b>{user['meme_count']}</b> мемов\n"
-        
+        text += f"{medal} <b>{meme['title']}</b> — <b>{meme.get('views', 0)}</b> просмотров\n"
+
+    if top_users:
+        text += f"\n{LEXICON['top_contributors_response']}"
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        for index, user in enumerate(top_users, start=1):
+            medal = medals.get(index, f"{index}.")
+            text += f"{medal} {format_username(user['sender_username'])} — <b>{user['meme_count']}</b> мемов\n"
+
     await message.answer(text)
 
 @router.message(Command("random"))
@@ -210,8 +252,23 @@ async def process_random_meme_command(message: Message):
         await message.answer("📦 В базе пока нет мемов. Будь первым, кто предложит годноту через /addmeme !")
         return
         
-    # Отправляем случайное видео юзеру
-    await message.answer_video(
-        video=meme['file_id'],
-        caption=f"🎲 Твой случайный мем дня:\n<b>{meme['title']}</b>"
-    )
+    await increment_meme_views(meme['id'])
+    updated_meme = await get_meme_by_id(meme['id'])
+
+    try:
+        await message.answer_video(
+            video=updated_meme['file_id'],
+            caption=f"🎲 Твой случайный мем дня:\n<b>{updated_meme['title']}</b>\n\n👁️ Просмотров: {updated_meme.get('views', 0)}"
+        )
+    except TelegramBadRequest as exc:
+        if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():
+            await message.answer(LEXICON['meme_unavailable'].format(title=updated_meme['title']))
+        else:
+            await message.answer(LEXICON['error'])
+    except Exception:
+        await message.answer(LEXICON['error'])
+
+
+@router.message(F.text == LEXICON['about_button'])
+async def process_about_request(message: Message):
+    await message.answer(text=LEXICON['about_text'])
