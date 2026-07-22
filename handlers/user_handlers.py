@@ -37,6 +37,8 @@ from database.db_core import (
     get_top_memes,
     is_inline_description_enabled,
     set_inline_description_enabled,
+    is_caption_enabled,
+    set_caption_enabled,
 )
 from config_data.config import load_config
 
@@ -47,19 +49,28 @@ config = load_config()
 def build_inline_query_results(
     memes: list[dict],
     show_description: bool = True,
+    show_caption: bool = True,
 ) -> list[InlineQueryResultCachedVideo]:
     results: list[InlineQueryResultCachedVideo] = []
     for meme in memes:
         title = meme.get('title') or 'Без названия'
         views = meme.get('views', 0)
+        file_id = meme.get('file_id', '')
+        
+        # Пропускаем мемы с невалидным file_id
+        if not file_id or len(file_id) < 20:
+            continue
+            
         description = f"👁️ Просмотров: {views}" if show_description else ''
+        caption = f"🎬 <b>{title}</b>\n\n👁️ Просмотров: {views}" if show_caption else ''
+        
         results.append(
             InlineQueryResultCachedVideo(
                 id=f"meme:{meme['id']}",
-                video_file_id=meme['file_id'],
+                video_file_id=file_id,
                 title=title,
                 description=description,
-                caption=f"🎬 <b>{title}</b>\n\n👁️ Просмотров: {views}",
+                caption=caption,
                 parse_mode='HTML',
             )
         )
@@ -75,6 +86,7 @@ class AddMemeState(StatesGroup):
 async def process_inline_query(query: InlineQuery):
     search_text = (query.query or '').strip().lower()
     memes = await get_all_memes()
+    user_id = query.from_user.id
 
     if search_text:
         filtered_memes = [
@@ -83,10 +95,8 @@ async def process_inline_query(query: InlineQuery):
         ]
     else:
         filtered_memes = sorted(memes, key=lambda meme: meme.get('views', 0), reverse=True)
-
-    if filtered_memes:
-        show_description = await is_inline_description_enabled()
-        results = build_inline_query_results(filtered_memes[:20], show_description=show_description)
+show_caption = await is_caption_enabled(user_id)
+        results = build_inline_query_results(filtered_memes[:20], show_description=show_description, show_caption=show_caption)
     else:
         results = [
             InlineQueryResultArticle(
@@ -96,6 +106,10 @@ async def process_inline_query(query: InlineQuery):
                     message_text='📦 В базе пока нет мемов, подходящих под этот запрос.'
                 ),
             )
+        ]
+
+    if results:
+                )
         ]
 
     await query.answer(results=results, cache_time=0, is_personal=False)
@@ -116,23 +130,51 @@ async def process_chosen_inline_result(result: ChosenInlineResult):
 
 @router.callback_query(F.data == 'toggle_inline_description')
 async def process_toggle_inline_description(callback: CallbackQuery):
-    enabled = await is_inline_description_enabled()
-    await set_inline_description_enabled(not enabled)
+    user_id = callback.from_user.id
+    enabled = await is_inline_description_enabled(user_id)
+    await set_inline_description_enabled(user_id, not enabled)
 
-    new_enabled = await is_inline_description_enabled()
+    new_enabled = await is_inline_description_enabled(user_id)
+    caption_enabled = await is_caption_enabled(user_id)
     await callback.message.edit_text(
-        text=LEXICON['settings_text'].format(status='включено' if new_enabled else 'выключено'),
-        reply_markup=create_settings_keyboard(new_enabled)
+        text=LEXICON['settings_text'].format(
+            description_status='включено' if new_enabled else 'выключено',
+            caption_status='включено' if caption_enabled else 'выключено'
+        ),
+        reply_markup=create_settings_keyboard(new_enabled, caption_enabled)
+    )
+    await callback.answer('Настройки обновлены')
+
+
+@router.callback_query(F.data == 'toggle_caption')
+async def process_toggle_caption(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    enabled = await is_caption_enabled(user_id)
+    await set_caption_enabled(user_id, not enabled)
+
+    new_enabled = await is_caption_enabled(user_id)
+    description_enabled = await is_inline_description_enabled(user_id)
+    await callback.message.edit_text(
+        text=LEXICON['settings_text'].format(
+            description_status='включено' if description_enabled else 'выключено',
+            caption_status='включено' if new_enabled else 'выключено'
+        ),
+        reply_markup=create_settings_keyboard(description_enabled, new_enabled)
     )
     await callback.answer('Настройки обновлены')
 
 
 @router.message(F.text == LEXICON['settings_button'])
 async def process_settings_request(message: Message):
-    enabled = await is_inline_description_enabled()
+    user_id = message.from_user.id
+    description_enabled = await is_inline_description_enabled(user_id)
+    caption_enabled = await is_caption_enabled(user_id)
     await message.answer(
-        text=LEXICON['settings_text'].format(status='включено' if enabled else 'выключено'),
-        reply_markup=create_settings_keyboard(enabled)
+        text=LEXICON['settings_text'].format(
+            description_status='включено' if description_enabled else 'выключено',
+            caption_status='включено' if caption_enabled else 'выключено'
+        ),
+        reply_markup=create_settings_keyboard(description_enabled, caption_enabled)
     )
 
 

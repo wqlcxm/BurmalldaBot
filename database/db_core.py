@@ -52,7 +52,9 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
-                score INTEGER NOT NULL DEFAULT 0
+                score INTEGER NOT NULL DEFAULT 0,
+                inline_description_enabled INTEGER DEFAULT 1,
+                caption_enabled INTEGER DEFAULT 1
             )
         ''')
         await db.execute('''
@@ -99,6 +101,20 @@ async def init_db():
             await db.execute("ALTER TABLE memes ADD COLUMN sender_username TEXT DEFAULT '@anon'")
             await db.commit()
             print('Колонка sender_username успешно добавлена в старую БД.')
+        except aiosqlite.OperationalError:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN inline_description_enabled INTEGER DEFAULT 1")
+            await db.commit()
+            print('Колонка inline_description_enabled успешно добавлена в таблицу users.')
+        except aiosqlite.OperationalError:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN caption_enabled INTEGER DEFAULT 1")
+            await db.commit()
+            print('Колонка caption_enabled успешно добавлена в таблицу users.')
         except aiosqlite.OperationalError:
             pass
 
@@ -188,15 +204,46 @@ async def is_user_allowed(user_id: int) -> bool:
             return await cursor.fetchone() is not None
 
 
-async def is_inline_description_enabled() -> bool:
-    """Проверяет, включено ли описание под результатами inline-запроса."""
-    value = await get_bot_setting('inline_description_enabled', '1')
-    return value != '0'
+async def is_inline_description_enabled(user_id: int) -> bool:
+    """Проверяет, включено ли описание под результатами inline-запроса для конкретного пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT inline_description_enabled FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            # По умолчанию включено (1)
+            return row[0] != 0 if row else True
 
 
-async def set_inline_description_enabled(enabled: bool) -> None:
-    """Включает или отключает описание под результатами inline-запроса."""
-    await set_bot_setting('inline_description_enabled', '1' if enabled else '0')
+async def set_inline_description_enabled(user_id: int, enabled: bool) -> None:
+    """Включает или отключает описание под результатами inline-запроса для конкретного пользователя."""
+    async with aiosqlite.
+
+
+async def is_caption_enabled(user_id: int) -> bool:
+    """Проверяет, включена ли подпись под видео для конкретного пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT caption_enabled FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            # По умолчанию включено (1)
+            return row[0] != 0 if row else True
+
+
+async def set_caption_enabled(user_id: int, enabled: bool) -> None:
+    """Включает или отключает подпись под видео для конкретного пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            '''INSERT INTO users (user_id, username, caption_enabled) VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+               caption_enabled = excluded.caption_enabled''',
+            (user_id, '@anon', 1 if enabled else 0)
+        )
+        await db.commit()connect(DB_PATH) as db:
+        await db.execute(
+            '''INSERT INTO users (user_id, username, inline_description_enabled) VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+               inline_description_enabled = excluded.inline_description_enabled''',
+            (user_id, '@anon', 1 if enabled else 0)
+        )
+        await db.commit()
 
 
 async def get_allowed_users() -> list[int]:

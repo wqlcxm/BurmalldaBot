@@ -44,12 +44,20 @@ def create_memes_inline_keyboard(memes_list: list[dict]) -> InlineKeyboardMarkup
     return builder.as_markup()
 
 
-def create_settings_keyboard(enabled: bool) -> InlineKeyboardMarkup:
-    """Генерирует клавиатуру для настройки inline-описаний."""
+def create_settings_keyboard(description_enabled: bool, caption_enabled: bool) -> InlineKeyboardMarkup:
+    """Генерирует клавиатуру для настройки inline-описаний и подписей."""
     builder = InlineKeyboardBuilder()
-    action_text = '✅ Отключить описание' if enabled else '🔄 Включить описание'
+    
+    description_text = '✅ Отключить описание в списке' if description_enabled else '🔄 Включить описание в списке'
+    caption_text = '✅ Отключить подпись под видео' if caption_enabled else '🔄 Включить подпись под видео'
+    
     builder.row(InlineKeyboardButton(
-        text=action_text,
+        text=description_text,
         callback_data='toggle_inline_description'
     ))
+    builder.row(InlineKeyboardButton(
+        text=caption_text,
+        callback_data='toggle_caption'
+    ))
+    
     return builder.as_markup()
