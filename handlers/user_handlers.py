@@ -3,7 +3,15 @@ import re
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineQuery,
+    ChosenInlineResult,
+    InlineQueryResultArticle,
+    InlineQueryResultCachedVideo,
+    InputTextMessageContent,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -28,10 +36,71 @@ from config_data.config import load_config
 router = Router()
 config = load_config()
 
+
+def build_inline_query_results(memes: list[dict]) -> list[InlineQueryResultCachedVideo]:
+    results: list[InlineQueryResultCachedVideo] = []
+    for meme in memes:
+        title = meme.get('title') or 'Без названия'
+        views = meme.get('views', 0)
+        results.append(
+            InlineQueryResultCachedVideo(
+                id=f"meme:{meme['id']}",
+                video_file_id=meme['file_id'],
+                title=title,
+                description=f"👁️ Просмотров: {views}",
+                caption=f"🎬 <b>{title}</b>\n\n👁️ Просмотров: {views}",
+                parse_mode='HTML',
+            )
+        )
+    return results
+
+
 # Состояния FSM для добавления мема
 class AddMemeState(StatesGroup):
     upload_video = State()  # Ожидание видеоролика
     type_title = State()    # Ожидание названия кнопки
+
+@router.inline_query()
+async def process_inline_query(query: InlineQuery):
+    search_text = (query.query or '').strip().lower()
+    memes = await get_all_memes()
+
+    if search_text:
+        filtered_memes = [
+            meme for meme in memes
+            if search_text in (meme.get('title') or '').lower()
+        ]
+    else:
+        filtered_memes = memes
+
+    if filtered_memes:
+        results = build_inline_query_results(filtered_memes[:20])
+    else:
+        results = [
+            InlineQueryResultArticle(
+                id='empty-results',
+                title='Пока нет подходящих мемов',
+                input_message_content=InputTextMessageContent(
+                    message_text='📦 В базе пока нет мемов, подходящих под этот запрос.'
+                ),
+            )
+        ]
+
+    await query.answer(results=results, cache_time=0, is_personal=False)
+
+
+@router.chosen_inline_result()
+async def process_chosen_inline_result(result: ChosenInlineResult):
+    if not result.result_id.startswith('meme:'):
+        return
+
+    try:
+        meme_id = int(result.result_id.split(':', 1)[1])
+    except ValueError:
+        return
+
+    await increment_meme_views(meme_id)
+
 
 @router.message(CommandStart())
 @router.message(F.text == LEXICON['back_button'])
