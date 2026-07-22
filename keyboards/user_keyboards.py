@@ -9,12 +9,13 @@ def create_main_menu() -> ReplyKeyboardMarkup:
     button_add_meme = KeyboardButton(text=LEXICON['add_meme_button'])
     button_random_meme = KeyboardButton(text=LEXICON['random_meme_button'])
     button_about = KeyboardButton(text=LEXICON['about_button'])
+    button_settings = KeyboardButton(text=LEXICON['settings_button'])
 
     return ReplyKeyboardMarkup(
         keyboard=[
         [button_meme, button_top],
         [button_add_meme, button_random_meme],
-        [button_about]
+        [button_settings, button_about]
         ],
         resize_keyboard=True
     )
@@ -40,4 +41,15 @@ def create_memes_inline_keyboard(memes_list: list[dict]) -> InlineKeyboardMarkup
             callback_data=f"show_meme_{meme['id']}"
         ))
         
+    return builder.as_markup()
+
+
+def create_settings_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    """Генерирует клавиатуру для настройки inline-описаний."""
+    builder = InlineKeyboardBuilder()
+    action_text = '✅ Отключить описание' if enabled else '🔄 Включить описание'
+    builder.row(InlineKeyboardButton(
+        text=action_text,
+        callback_data='toggle_inline_description'
+    ))
     return builder.as_markup()

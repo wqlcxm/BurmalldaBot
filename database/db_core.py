@@ -141,6 +141,24 @@ async def set_maintenance_mode(enabled: bool) -> None:
         await db.commit()
 
 
+async def get_bot_setting(key: str, default: str = '') -> str:
+    """Возвращает значение настройки из таблицы bot_settings."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT value FROM bot_settings WHERE key = ?', (key,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else default
+
+
+async def set_bot_setting(key: str, value: str) -> None:
+    """Сохраняет значение настройки в таблице bot_settings."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'INSERT INTO bot_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            (key, value)
+        )
+        await db.commit()
+
+
 async def is_maintenance_enabled() -> bool:
     """Проверяет, включён ли режим техработ."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -168,6 +186,17 @@ async def is_user_allowed(user_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT 1 FROM maintenance_allowed_users WHERE user_id = ?', (user_id,)) as cursor:
             return await cursor.fetchone() is not None
+
+
+async def is_inline_description_enabled() -> bool:
+    """Проверяет, включено ли описание под результатами inline-запроса."""
+    value = await get_bot_setting('inline_description_enabled', '1')
+    return value != '0'
+
+
+async def set_inline_description_enabled(enabled: bool) -> None:
+    """Включает или отключает описание под результатами inline-запроса."""
+    await set_bot_setting('inline_description_enabled', '1' if enabled else '0')
 
 
 async def get_allowed_users() -> list[int]:

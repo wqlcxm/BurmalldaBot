@@ -22,6 +22,13 @@ class InlineModeTests(unittest.TestCase):
         self.assertEqual(results[0].video_file_id, "video_file_id")
         self.assertIn("Просмотров: 12", results[0].description)
 
+    def test_build_inline_query_results_can_hide_description(self) -> None:
+        memes = [{"id": 8, "title": "Скрытый мем", "file_id": "video_file_id_2", "views": 3}]
+
+        results = user_handlers.build_inline_query_results(memes, show_description=False)
+
+        self.assertEqual(results[0].description, "")
+
 
 if __name__ == "__main__":
     unittest.main()

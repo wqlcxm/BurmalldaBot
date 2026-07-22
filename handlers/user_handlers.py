@@ -16,7 +16,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from lexicons.lexicon import LEXICON
-from keyboards.user_keyboards import create_main_menu, create_memes_inline_keyboard, create_cancel_menu
+from keyboards.user_keyboards import (
+    create_main_menu,
+    create_memes_inline_keyboard,
+    create_cancel_menu,
+    create_settings_keyboard,
+)
 from keyboards.admin_keyboards import create_moderation_keyboard
 from database.db_core import (
     get_all_memes,
@@ -30,6 +35,8 @@ from database.db_core import (
     register_user,
     increment_meme_views,
     get_top_memes,
+    is_inline_description_enabled,
+    set_inline_description_enabled,
 )
 from config_data.config import load_config
 
@@ -37,17 +44,21 @@ router = Router()
 config = load_config()
 
 
-def build_inline_query_results(memes: list[dict]) -> list[InlineQueryResultCachedVideo]:
+def build_inline_query_results(
+    memes: list[dict],
+    show_description: bool = True,
+) -> list[InlineQueryResultCachedVideo]:
     results: list[InlineQueryResultCachedVideo] = []
     for meme in memes:
         title = meme.get('title') or 'Без названия'
         views = meme.get('views', 0)
+        description = f"👁️ Просмотров: {views}" if show_description else ''
         results.append(
             InlineQueryResultCachedVideo(
                 id=f"meme:{meme['id']}",
                 video_file_id=meme['file_id'],
                 title=title,
-                description=f"👁️ Просмотров: {views}",
+                description=description,
                 caption=f"🎬 <b>{title}</b>\n\n👁️ Просмотров: {views}",
                 parse_mode='HTML',
             )
@@ -71,10 +82,11 @@ async def process_inline_query(query: InlineQuery):
             if search_text in (meme.get('title') or '').lower()
         ]
     else:
-        filtered_memes = memes
+        filtered_memes = sorted(memes, key=lambda meme: meme.get('views', 0), reverse=True)
 
     if filtered_memes:
-        results = build_inline_query_results(filtered_memes[:20])
+        show_description = await is_inline_description_enabled()
+        results = build_inline_query_results(filtered_memes[:20], show_description=show_description)
     else:
         results = [
             InlineQueryResultArticle(
@@ -100,6 +112,28 @@ async def process_chosen_inline_result(result: ChosenInlineResult):
         return
 
     await increment_meme_views(meme_id)
+
+
+@router.callback_query(F.data == 'toggle_inline_description')
+async def process_toggle_inline_description(callback: CallbackQuery):
+    enabled = await is_inline_description_enabled()
+    await set_inline_description_enabled(not enabled)
+
+    new_enabled = await is_inline_description_enabled()
+    await callback.message.edit_text(
+        text=LEXICON['settings_text'].format(status='включено' if new_enabled else 'выключено'),
+        reply_markup=create_settings_keyboard(new_enabled)
+    )
+    await callback.answer('Настройки обновлены')
+
+
+@router.message(F.text == LEXICON['settings_button'])
+async def process_settings_request(message: Message):
+    enabled = await is_inline_description_enabled()
+    await message.answer(
+        text=LEXICON['settings_text'].format(status='включено' if enabled else 'выключено'),
+        reply_markup=create_settings_keyboard(enabled)
+    )
 
 
 @router.message(CommandStart())
