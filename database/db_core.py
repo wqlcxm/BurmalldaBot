@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 import shutil
 import sqlite3
 
@@ -9,16 +10,17 @@ from database.migrations import run_migrations
 
 DB_DIR = Path(__file__).resolve().parent
 
-# Единственная рабочая БД: сюда бот всегда пишет и читает.
-# Файл должен быть в .gitignore, иначе git pull затирает новые мемы.
-LIVE_DB_NAME = 'memes_old.db'
+# Рабочая БД для чтения и записи: сюда бот пишет новые мемы и юзеров.
+LIVE_DB_NAME = 'memes.db'
+
+# Дополнительная read-only БД: бот читает отсюда старые мемы.
+READONLY_DB_NAME = 'memes_old.db'
 
 # Сиды только для первичного восстановления / первого запуска.
 # В них бот никогда не пишет во время работы.
 SEED_DB_NAMES = (
     'original_memes_old.db',
     'original_memes.db',
-    'memes.db',
 )
 
 
@@ -85,7 +87,17 @@ def resolve_db_path(db_dir: Path | None = None) -> str:
     return str(live_path)
 
 
+def resolve_readonly_db_path(db_dir: Path | None = None) -> str | None:
+    """Возвращает путь к read-only БД (memes_old.db), или None если файла нет."""
+    base_dir = db_dir or DB_DIR
+    readonly_path = base_dir / READONLY_DB_NAME
+    if readonly_path.exists():
+        return str(readonly_path)
+    return None
+
+
 DB_PATH = resolve_db_path()
+READ_DB_PATH: str | None = None
 
 
 def normalize_username(username: str | None) -> str:
@@ -108,14 +120,101 @@ def format_username(username: str | None) -> str:
 
 async def init_db(db_path: str | None = None):
     """Готовит рабочую БД и применяет миграции, не трогая пользовательские данные зря."""
-    global DB_PATH
+    global DB_PATH, READ_DB_PATH
     DB_PATH = db_path if db_path is not None else resolve_db_path()
-    print(f'Используется база данных: {DB_PATH}')
+    if db_path is not None:
+        READ_DB_PATH = None
+    else:
+        READ_DB_PATH = resolve_readonly_db_path()
+    print(f'Используется база данных (write): {DB_PATH}')
+    if READ_DB_PATH:
+        print(f'Используется база данных (read-only): {READ_DB_PATH}')
     async with aiosqlite.connect(DB_PATH) as db:
         applied = await run_migrations(db)
         for migration_id in applied:
             print(f'Применена миграция: {migration_id}')
 
+
+# ---------------------------------------------------------------------------
+# Внутренние хелперы для работы с двумя БД
+# ---------------------------------------------------------------------------
+
+async def _fetch_memes_from_db(db_path: str) -> list[dict]:
+    """Читает все мемы из одной конкретной БД."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM memes ORDER BY id ASC') as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def _has_meme_in_db(db_path: str, file_id: str) -> bool:
+    """Проверяет, есть ли мем с таким file_id в указанной БД."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            'SELECT 1 FROM memes WHERE file_id = ? LIMIT 1', (file_id,)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def _migrate_meme_to_live(meme: dict) -> int:
+    """Копирует мем из read-only БД в рабочую. Возвращает новый ID."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'INSERT INTO memes (file_id, title, sender_id, sender_username, views) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (
+                meme['file_id'],
+                meme['title'],
+                meme.get('sender_id', 0),
+                meme.get('sender_username', '@anon'),
+                meme.get('views', 0),
+            ),
+        )
+        new_id = cursor.lastrowid
+        await db.commit()
+    return new_id
+
+
+async def _delete_meme_from_readonly(file_id: str) -> None:
+    """Удаляет мем из read-only БД после миграции (чтобы не дублировать)."""
+    if not READ_DB_PATH:
+        return
+    async with aiosqlite.connect(READ_DB_PATH) as db:
+        await db.execute('DELETE FROM memes WHERE file_id = ?', (file_id,))
+        await db.commit()
+
+
+async def _maybe_migrate_meme(meme: dict) -> dict:
+    """Если мем есть только в read-only БД — мигрирует в рабочую.
+
+    Возвращает мем с обновлённым id (из рабочей БД).
+    Если мем уже в рабочей БД — возвращает как есть.
+    """
+    file_id = meme['file_id']
+
+    if not READ_DB_PATH:
+        return meme
+
+    in_live = await _has_meme_in_db(DB_PATH, file_id)
+    if in_live:
+        return meme
+
+    in_readonly = await _has_meme_in_db(READ_DB_PATH, file_id)
+    if not in_readonly:
+        return meme
+
+    new_id = await _migrate_meme_to_live(meme)
+    await _delete_meme_from_readonly(file_id)
+
+    migrated = dict(meme)
+    migrated['id'] = new_id
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Бан-лист (только рабочая БД)
+# ---------------------------------------------------------------------------
 
 async def ban_user(user_id: int):
     """Добавляет юзера в бан-лист."""
@@ -287,11 +386,21 @@ async def register_user(user_id: int, username: str | None = None) -> None:
 
 
 async def get_all_user_ids() -> list[int]:
-    """Возвращает список идентификаторов зарегистрированных пользователей."""
+    """Возвращает уникальные user_id из обеих БД."""
+    ids: set[int] = set()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT user_id FROM users') as cursor:
             rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+            ids.update(row[0] for row in rows)
+    if READ_DB_PATH:
+        try:
+            async with aiosqlite.connect(READ_DB_PATH) as db:
+                async with db.execute('SELECT user_id FROM users') as cursor:
+                    rows = await cursor.fetchall()
+                    ids.update(row[0] for row in rows)
+        except Exception:
+            pass
+    return list(ids)
 
 
 async def add_meme(
@@ -330,28 +439,74 @@ async def add_meme(
 
 
 async def increment_meme_views(meme_id: int) -> None:
-    """Увеличивает счётчик просмотров для выбранного мема."""
+    """Увеличивает счётчик просмотров для выбранного мема.
+
+    Если мем в read-only БД — сначала мигрирует его в рабочую.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT 1 FROM memes WHERE id = ?', (meme_id,)) as cursor:
+            in_live = await cursor.fetchone() is not None
+
+    if not in_live and READ_DB_PATH:
+        meme = await get_meme_by_id(meme_id)
+        if meme and meme['id'] != meme_id:
+            meme_id = meme['id']
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('UPDATE memes SET views = views + 1 WHERE id = ?', (meme_id,))
         await db.commit()
 
 
 async def get_all_memes() -> list[dict]:
-    """Возвращает список всех мемов из базе в порядке добавления."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM memes ORDER BY id ASC') as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+    """Возвращает список всех мемов из обеих БД, дедуплицированных по file_id."""
+    seen: set[str] = set()
+    result: list[dict] = []
+
+    memes_live = await _fetch_memes_from_db(DB_PATH)
+    for m in memes_live:
+        fid = m['file_id']
+        if fid not in seen:
+            seen.add(fid)
+            result.append(m)
+
+    if READ_DB_PATH:
+        try:
+            memes_old = await _fetch_memes_from_db(READ_DB_PATH)
+            for m in memes_old:
+                fid = m['file_id']
+                if fid not in seen:
+                    seen.add(fid)
+                    result.append(m)
+        except Exception:
+            pass
+
+    result.sort(key=lambda m: m.get('id', 0))
+    return result
 
 
 async def get_meme_by_id(meme_id: int) -> dict | None:
-    """Возвращает конкретный мем по его ID."""
+    """Возвращает конкретный мем по его ID. Ищет в обеих БД."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute('SELECT * FROM memes WHERE id = ?', (meme_id,)) as cursor:
             row = await cursor.fetchone()
-            return dict(row) if row else None
+            if row:
+                return dict(row)
+
+    if READ_DB_PATH:
+        try:
+            async with aiosqlite.connect(READ_DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute('SELECT * FROM memes WHERE id = ?', (meme_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        meme = dict(row)
+                        migrated = await _maybe_migrate_meme(meme)
+                        return migrated
+        except Exception:
+            pass
+
+    return None
 
 
 async def reset_top_contributors() -> None:
@@ -362,44 +517,58 @@ async def reset_top_contributors() -> None:
 
 
 async def get_top_contributors() -> list[dict]:
-    """Возвращает топ-10 пользователей по количеству одобренных мемов."""
+    """Топ-10 пользователей по score из обеих БД (суммирует score при совпадении).
+
+    Не включает пользователей с show_in_top = 0.
+    """
+    scores: dict[str, int] = {}
+    hidden: set[str] = set()
+
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute('''
-            SELECT username AS sender_username, score AS meme_count
-            FROM users
-            WHERE score > 0 AND show_in_top != 0
-            ORDER BY score DESC, username ASC
-            LIMIT 10
-        ''') as cursor:
+        async with db.execute(
+            'SELECT username, score, show_in_top FROM users WHERE score > 0'
+        ) as cursor:
             rows = await cursor.fetchall()
-            result = []
-            for row in rows:
-                row_data = dict(row)
-                row_data['sender_username'] = normalize_username(row_data['sender_username'])
-                result.append(row_data)
-            return result
+            for username, score, show_in_top in rows:
+                key = normalize_username(username)
+                scores[key] = scores.get(key, 0) + score
+                if show_in_top == 0:
+                    hidden.add(key)
+
+    if READ_DB_PATH:
+        try:
+            async with aiosqlite.connect(READ_DB_PATH) as db:
+                async with db.execute(
+                    'SELECT username, score FROM users WHERE score > 0'
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    for username, score in rows:
+                        key = normalize_username(username)
+                        scores[key] = scores.get(key, 0) + score
+        except Exception:
+            pass
+
+    filtered = [(u, s) for u, s in scores.items() if u not in hidden]
+    sorted_users = sorted(filtered, key=lambda x: (-x[1], x[0]))[:10]
+    return [
+        {'sender_username': username, 'meme_count': score}
+        for username, score in sorted_users
+    ]
 
 
 async def get_top_memes(limit: int = 3) -> list[dict]:
-    """Возвращает самые популярные мемы по числу просмотров."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            'SELECT id, title, views FROM memes ORDER BY views DESC, id ASC LIMIT ?',
-            (limit,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+    """Возвращает самые популярные мемы по числу просмотров из обеих БД."""
+    all_memes = await get_all_memes()
+    all_memes.sort(key=lambda m: (-int(m.get('views', 0)), m.get('id', 0)))
+    return all_memes[:limit]
 
 
 async def get_random_meme() -> dict | None:
-    """Возвращает случайный мем из базы данных."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM memes ORDER BY RANDOM() LIMIT 1') as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    """Возвращает случайный мем из объединённых БД."""
+    memes = await get_all_memes()
+    if not memes:
+        return None
+    return random.choice(memes)
 
 
 async def delete_meme(meme_id: int) -> bool:
@@ -448,7 +617,19 @@ async def get_user_liked_meme_ids(user_id: int) -> set[int]:
 
 
 async def toggle_meme_like(user_id: int, meme_id: int) -> tuple[bool, int]:
-    """Ставит или снимает лайк. Возвращает (сейчас_лайкнут, число_лайков)."""
+    """Ставит или снимает лайк. Возвращает (сейчас_лайкнут, число_лайков).
+
+    Если мем в read-only БД — сначала мигрирует его в рабочую.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT 1 FROM memes WHERE id = ?', (meme_id,)) as cursor:
+            in_live = await cursor.fetchone() is not None
+
+    if not in_live and READ_DB_PATH:
+        meme = await get_meme_by_id(meme_id)
+        if meme and meme['id'] != meme_id:
+            meme_id = meme['id']
+
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             'SELECT 1 FROM meme_likes WHERE user_id = ? AND meme_id = ?',

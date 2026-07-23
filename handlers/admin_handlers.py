@@ -11,8 +11,10 @@ from database.db_core import (
     ban_user,
     delete_meme,
     format_username,
+    get_all_memes,
     get_all_user_ids,
     get_allowed_users,
+    get_meme_by_id,
     is_maintenance_enabled,
     remove_allowed_user,
     set_maintenance_mode,
@@ -502,14 +504,9 @@ async def admin_manage_memes(callback: CallbackQuery):
     limit = 5
     offset = page * limit
 
-    async with aiosqlite.connect(get_db_path()) as db:
-        db.row_factory = aiosqlite.Row
-        # Берем порцию мемов
-        async with db.execute('SELECT id, title FROM memes LIMIT ? OFFSET ?', (limit, offset)) as cursor:
-            memes = await cursor.fetchall()
-        # Считаем общее количество
-        async with db.execute('SELECT COUNT(id) FROM memes') as cursor:
-            total_memes = (await cursor.fetchone())[0]
+    all_memes = await get_all_memes()
+    total_memes = len(all_memes)
+    memes = all_memes[offset:offset + limit]
 
     if not memes:
         await callback.message.edit_text("📦 В базе данных пока нет меums.", 
@@ -550,20 +547,18 @@ async def edit_meme_card(callback: CallbackQuery):
     await callback.answer()
     meme_id = int(callback.data.split("_")[1])
     
-    async with aiosqlite.connect(get_db_path()) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT title, file_id FROM memes WHERE id = ?', (meme_id,)) as cursor:
-            meme = await cursor.fetchone()
+    meme = await get_meme_by_id(meme_id)
 
     if not meme:
         await callback.message.edit_text("Мем не найден.")
         return
 
-    text = f"⚙️ <b>Редактирование мема:</b>\n\n<b>Название:</b> {meme['title']}\n<b>ID в базе:</b> {meme_id}"
+    actual_id = meme['id']
+    text = f"⚙️ <b>Редактирование мема:</b>\n\n<b>Название:</b> {meme['title']}\n<b>ID в базе:</b> {actual_id}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"mrename_{meme_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить мем", callback_data=f"mdel_{meme_id}")],
+        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"mrename_{actual_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить мем", callback_data=f"mdel_{actual_id}")],
         [InlineKeyboardButton(text="🔙 К списку мемов", callback_data="admin_manage_memes")]
     ])
     
