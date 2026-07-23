@@ -6,13 +6,22 @@ import aiosqlite
 from database.migrations import run_migrations
 
 DB_DIR = Path(__file__).resolve().parent
-DEFAULT_DB = 'memes_old.db'
-LEGACY_DB = 'memes.db'
 
-if (DB_DIR / DEFAULT_DB).exists():
-    DB_PATH = str(DB_DIR / DEFAULT_DB)
-else:
-    DB_PATH = str(DB_DIR / LEGACY_DB)
+# Приоритет: original_* (боевые бэкапы) → рабочие файлы.
+# Так hotfix не зависит от того, что git когда-то перезаписал memes_old.db.
+DB_CANDIDATES = (
+    'original_memes_old.db',
+    'original_memes.db',
+    'memes_old.db',
+    'memes.db',
+)
+
+DB_PATH = str(DB_DIR / DB_CANDIDATES[-1])
+for _db_name in DB_CANDIDATES:
+    _db_path = DB_DIR / _db_name
+    if _db_path.exists():
+        DB_PATH = str(_db_path)
+        break
 
 
 def normalize_username(username: str | None) -> str:

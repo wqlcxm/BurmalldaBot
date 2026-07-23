@@ -1,1 +1,9 @@
 .env
+__pycache__/
+*.pyc
+
+# Рабочие базы не храним в git — иначе pull затирает боевые данные.
+database/memes.db
+database/memes_old.db
+
+# original_* оставляем в репозитории как бэкап/источник для hotfix.
