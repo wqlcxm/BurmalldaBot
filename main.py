@@ -7,11 +7,12 @@ from middlewares.check_sub import CheckSubscriptionMiddleware
 from middlewares.user_registration import UserRegistrationMiddleware
 from config_data.config import load_config
 from handlers import user_handlers, admin_handlers
-from database.db_core import init_db
+from database import db_core
 
 async def main():
     # Инициализируем базу данных
-    await init_db()
+    await db_core.init_db()
+    print(f"Бот работает с БД: {db_core.DB_PATH}")
     
     # Загружаем конфиг
     config = load_config()

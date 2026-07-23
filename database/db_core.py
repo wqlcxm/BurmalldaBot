@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import sqlite3
 
 from aiogram.types import User
 import aiosqlite
@@ -7,21 +9,61 @@ from database.migrations import run_migrations
 
 DB_DIR = Path(__file__).resolve().parent
 
-# Приоритет: original_* (боевые бэкапы) → рабочие файлы.
-# Так hotfix не зависит от того, что git когда-то перезаписал memes_old.db.
-DB_CANDIDATES = (
+# Единственная рабочая БД: сюда бот всегда пишет и читает.
+# Файл должен быть в .gitignore, иначе git pull затирает новые мемы.
+LIVE_DB_NAME = 'memes_old.db'
+
+# Сиды только для первичного восстановления / первого запуска.
+# В них бот никогда не пишет во время работы.
+SEED_DB_NAMES = (
     'original_memes_old.db',
     'original_memes.db',
-    'memes_old.db',
     'memes.db',
 )
 
-DB_PATH = str(DB_DIR / DB_CANDIDATES[-1])
-for _db_name in DB_CANDIDATES:
-    _db_path = DB_DIR / _db_name
-    if _db_path.exists():
-        DB_PATH = str(_db_path)
-        break
+
+def _count_memes(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='memes'"
+            ).fetchone()
+            if not row:
+                return 0
+            return int(conn.execute('SELECT COUNT(*) FROM memes').fetchone()[0])
+    except sqlite3.Error:
+        return 0
+
+
+def resolve_db_path(db_dir: Path | None = None) -> str:
+    """Возвращает путь к рабочей БД, при необходимости копируя данные из original_*."""
+    base_dir = db_dir or DB_DIR
+    live_path = base_dir / LIVE_DB_NAME
+
+    seed_path = None
+    for seed_name in SEED_DB_NAMES:
+        candidate = base_dir / seed_name
+        if candidate.exists():
+            seed_path = candidate
+            break
+
+    if seed_path is not None:
+        live_count = _count_memes(live_path)
+        seed_count = _count_memes(seed_path)
+        # Нет рабочей БД или она пустее сида (типичный случай после git pull / 1.7.1).
+        if not live_path.exists() or seed_count > live_count:
+            shutil.copy2(seed_path, live_path)
+            print(
+                f'Рабочая БД восстановлена из {seed_path.name}: '
+                f'{seed_count} мемов -> {live_path.name}'
+            )
+
+    return str(live_path)
+
+
+DB_PATH = resolve_db_path()
 
 
 def normalize_username(username: str | None) -> str:
@@ -42,8 +84,11 @@ def format_username(username: str | None) -> str:
     return normalize_username(username)
 
 
-async def init_db():
-    """Создаёт недостающие таблицы/колонки через миграции, не трогая данные."""
+async def init_db(db_path: str | None = None):
+    """Готовит рабочую БД и применяет миграции, не трогая пользовательские данные зря."""
+    global DB_PATH
+    DB_PATH = db_path if db_path is not None else resolve_db_path()
+    print(f'Используется база данных: {DB_PATH}')
     async with aiosqlite.connect(DB_PATH) as db:
         applied = await run_migrations(db)
         for migration_id in applied:

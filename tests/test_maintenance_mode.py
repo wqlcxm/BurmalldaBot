@@ -12,7 +12,7 @@ class MaintenanceModeTests(unittest.TestCase):
         self.db_path = os.path.join(self.temp_dir.name, "memes.db")
         self.original_db_path = db_core.DB_PATH
         db_core.DB_PATH = self.db_path
-        asyncio.run(db_core.init_db())
+        asyncio.run(db_core.init_db(self.db_path))
 
     def tearDown(self) -> None:
         db_core.DB_PATH = self.original_db_path
