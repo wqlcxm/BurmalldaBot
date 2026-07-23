@@ -2,10 +2,6 @@
 __pycache__/
 *.pyc
 
-# Рабочая БД никогда не должна попадать в git — иначе pull затирает новые мемы.
-database/memes.db
-database/memes_old.db
-database/data.db
-
-# original_* можно держать как seed для первого запуска / восстановления,
-# но бот пишет только в memes_old.db.
+# Все SQLite-базы только на хосте / локально, не в git.
+*.db
+database/*.db

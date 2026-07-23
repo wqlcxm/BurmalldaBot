@@ -109,9 +109,10 @@ class LiveDbResolveTests(unittest.TestCase):
         live = Path(db_core.resolve_db_path(self.base))
         self.assertEqual(live.name, 'memes_old.db')
         self.assertTrue(live.exists())
-        self.assertEqual(db_core._count_memes(live), 3)
+        # original_* файлы: таблицы memes и users не копируются
+        self.assertEqual(db_core._count_memes(live), 0)
 
-    def test_restores_live_db_when_seed_has_more_memes(self) -> None:
+    def test_does_not_overwrite_live_db_even_if_seed_has_more_memes(self) -> None:
         live = self.base / 'memes_old.db'
         seed = self.base / 'original_memes_old.db'
         self._make_db_with_memes(live, ['only-one'])
@@ -119,7 +120,7 @@ class LiveDbResolveTests(unittest.TestCase):
 
         resolved = Path(db_core.resolve_db_path(self.base))
         self.assertEqual(resolved, live)
-        self.assertEqual(db_core._count_memes(live), 4)
+        self.assertEqual(db_core._count_memes(live), 1)
 
     def test_keeps_live_db_when_it_already_has_more_memes(self) -> None:
         live = self.base / 'memes_old.db'

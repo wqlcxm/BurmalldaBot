@@ -48,6 +48,7 @@ from database.db_core import (
     get_user_liked_meme_ids,
     toggle_meme_like,
     sort_memes_for_inline,
+    get_all_meme_likes_counts,
 )
 from config_data.config import load_config
 from services.captions import build_video_caption
@@ -81,10 +82,15 @@ def build_inline_query_results(
     for meme in memes:
         title = meme.get('title') or 'Без названия'
         views = meme.get('views', 0)
-        description = f"👁️ Просмотров: {views}" if show_description else ''
+        likes = meme.get('likes', 0)
+        if show_description:
+            description = f"❤️ {likes} | 👁️ {views}"
+        else:
+            description = ''
         caption = build_video_caption(
             title=title,
             views=views,
+            likes=likes,
             show_details=show_description,
         )
         results.append(
@@ -107,20 +113,29 @@ class AddMemeState(StatesGroup):
 
 @router.inline_query()
 async def process_inline_query(query: InlineQuery):
-    search_text = (query.query or '').strip().lower()
+    raw_query = (query.query or '').strip()
+    search_text = raw_query.lower()
+    # Telegram часто плохо показывает результаты на пустом запросе —
+    # ! и ? открывают тот же топ (лайки сверху, затем по просмотрам).
+    top_triggers = {'!', '?', '!?', '?!'}
+    show_top = (not search_text) or (search_text in top_triggers)
+
     memes = await get_all_memes()
     liked_ids = await get_user_liked_meme_ids(query.from_user.id)
+    likes_counts = await get_all_meme_likes_counts()
 
-    if search_text:
+    if show_top:
+        filtered_memes = list(memes)
+    else:
         filtered_memes = [
             meme for meme in memes
             if search_text in (meme.get('title') or '').lower()
         ]
-    else:
-        filtered_memes = list(memes)
 
-    # Лайкнутые сверху, внутри групп — по убыванию просмотров.
-    filtered_memes = sort_memes_for_inline(filtered_memes, liked_ids)
+    # Лайкнутые сверху, внутри групп — по лайкам, затем по просмотрам.
+    filtered_memes = sort_memes_for_inline(
+        filtered_memes, liked_ids, likes_counts, top_mode=show_top,
+    )
 
     if filtered_memes:
         show_description = await is_inline_description_enabled()

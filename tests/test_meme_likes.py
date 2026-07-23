@@ -41,6 +41,14 @@ class MemeLikesTests(unittest.TestCase):
         self.assertFalse(liked)
         self.assertEqual(count, 0)
 
+    def test_delete_meme_removes_likes_too(self) -> None:
+        asyncio.run(db_core.add_meme('f1', 'ToDelete', sender_id=1, sender_username='@a'))
+        asyncio.run(db_core.toggle_meme_like(5, 1))
+        self.assertTrue(asyncio.run(db_core.delete_meme(1)))
+        self.assertIsNone(asyncio.run(db_core.get_meme_by_id(1)))
+        self.assertEqual(asyncio.run(db_core.get_meme_likes_count(1)), 0)
+        self.assertFalse(asyncio.run(db_core.delete_meme(1)))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,7 @@ from database.db_core import (
     add_allowed_user,
     add_meme,
     ban_user,
+    delete_meme,
     format_username,
     get_all_user_ids,
     get_allowed_users,
@@ -573,12 +574,12 @@ async def edit_meme_card(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mdel_"))
 async def delete_meme_action(callback: CallbackQuery):
     meme_id = int(callback.data.split("_")[1])
-    
-    async with aiosqlite.connect(get_db_path()) as db:
-        await db.execute('DELETE FROM memes WHERE id = ?', (meme_id,))
-        await db.commit()
-        
-    await callback.answer("🗑 Мем успешно удален!", show_alert=True)
+
+    deleted = await delete_meme(meme_id)
+    if deleted:
+        await callback.answer("🗑 Мем полностью удалён из базы!", show_alert=True)
+    else:
+        await callback.answer("Мем уже отсутствует в базе", show_alert=True)
     # Возвращаем админа к списку мемов
     await admin_manage_memes(callback)
 

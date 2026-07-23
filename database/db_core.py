@@ -22,6 +22,18 @@ SEED_DB_NAMES = (
 )
 
 
+SEED_EXCLUDE_TABLES = ('memes', 'users')
+
+
+def _copy_db_excluding_tables(src: Path, dst: Path, exclude_tables: tuple[str, ...]) -> None:
+    """Копирует SQLite-базу, пропуская указанные таблицы."""
+    shutil.copy2(src, dst)
+    with sqlite3.connect(dst) as conn:
+        for table in exclude_tables:
+            conn.execute(f'DROP TABLE IF EXISTS {table}')
+        conn.commit()
+
+
 def _count_memes(db_path: Path) -> int:
     if not db_path.exists():
         return 0
@@ -38,27 +50,37 @@ def _count_memes(db_path: Path) -> int:
 
 
 def resolve_db_path(db_dir: Path | None = None) -> str:
-    """Возвращает путь к рабочей БД, при необходимости копируя данные из original_*."""
+    """Возвращает путь к рабочей БД.
+
+    Сид из original_* копируется ТОЛЬКО если рабочей БД ещё нет.
+    Никогда не перезаписывает существующую live-базу — иначе удаление
+    мемов и новые загрузки откатываются при каждом перезапуске.
+
+    Для original_* файлов таблицы memes и users не копируются,
+    чтобы удалённые мемы не возвращались при пересоздании БД.
+    """
     base_dir = db_dir or DB_DIR
     live_path = base_dir / LIVE_DB_NAME
 
-    seed_path = None
-    for seed_name in SEED_DB_NAMES:
-        candidate = base_dir / seed_name
-        if candidate.exists():
-            seed_path = candidate
-            break
+    if live_path.exists():
+        return str(live_path)
 
-    if seed_path is not None:
-        live_count = _count_memes(live_path)
-        seed_count = _count_memes(seed_path)
-        # Нет рабочей БД или она пустее сида (типичный случай после git pull / 1.7.1).
-        if not live_path.exists() or seed_count > live_count:
-            shutil.copy2(seed_path, live_path)
-            print(
-                f'Рабочая БД восстановлена из {seed_path.name}: '
-                f'{seed_count} мемов -> {live_path.name}'
-            )
+    for seed_name in SEED_DB_NAMES:
+        seed_path = base_dir / seed_name
+        if seed_path.exists():
+            if seed_name.startswith('original_'):
+                _copy_db_excluding_tables(seed_path, live_path, SEED_EXCLUDE_TABLES)
+                print(
+                    f'Рабочая БД создана из {seed_path.name} '
+                    f'(без таблиц {", ".join(SEED_EXCLUDE_TABLES)}): -> {live_path.name}'
+                )
+            else:
+                shutil.copy2(seed_path, live_path)
+                print(
+                    f'Рабочая БД создана из {seed_path.name}: '
+                    f'{_count_memes(live_path)} мемов -> {live_path.name}'
+                )
+            break
 
     return str(live_path)
 
@@ -380,6 +402,19 @@ async def get_random_meme() -> dict | None:
             return dict(row) if row else None
 
 
+async def delete_meme(meme_id: int) -> bool:
+    """Полностью удаляет мем и его лайки из рабочей БД."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT 1 FROM memes WHERE id = ?', (meme_id,)) as cursor:
+            exists = await cursor.fetchone() is not None
+        if not exists:
+            return False
+        await db.execute('DELETE FROM meme_likes WHERE meme_id = ?', (meme_id,))
+        await db.execute('DELETE FROM memes WHERE id = ?', (meme_id,))
+        await db.commit()
+        return True
+
+
 async def get_meme_likes_count(meme_id: int) -> int:
     """Возвращает число лайков у мема."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -445,15 +480,43 @@ async def toggle_meme_like(user_id: int, meme_id: int) -> tuple[bool, int]:
     return liked, count
 
 
-def sort_memes_for_inline(memes: list[dict], liked_ids: set[int] | None = None) -> list[dict]:
-    """Сначала лайкнутые пользователем, затем по убыванию просмотров."""
+async def get_all_meme_likes_counts() -> dict[int, int]:
+    """Возвращает словарь {meme_id: количество_лайков} для всех мемов."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT meme_id, COUNT(*) FROM meme_likes GROUP BY meme_id'
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {row[0]: row[1] for row in rows}
+
+
+def sort_memes_for_inline(
+    memes: list[dict],
+    liked_ids: set[int] | None = None,
+    likes_counts: dict[int, int] | None = None,
+    top_mode: bool = False,
+) -> list[dict]:
+    """Сортировка мемов для инлайн-запроса.
+
+    top_mode=True  → сначала по убыванию лайков, затем просмотров.
+    top_mode=False → лайкнутые пользователем сверху, внутри — по лайкам,
+                      затем по просмотрам.
+    """
     liked = liked_ids or set()
-    return sorted(
-        memes,
-        key=lambda meme: (
-            0 if meme.get('id') in liked else 1,
-            -int(meme.get('views') or 0),
-            int(meme.get('id') or 0),
-        ),
-    )
+    counts = likes_counts or {}
+
+    def _sort_key(meme: dict):
+        meme_id = meme.get('id') or 0
+        meme_likes = counts.get(meme_id, 0)
+        meme_views = int(meme.get('views') or 0)
+        if top_mode:
+            return (-meme_likes, -meme_views, meme_id)
+        return (
+            0 if meme_id in liked else 1,
+            -meme_likes,
+            -meme_views,
+            meme_id,
+        )
+
+    return sorted(memes, key=_sort_key)
 

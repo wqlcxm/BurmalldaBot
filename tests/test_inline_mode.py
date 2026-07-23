@@ -21,7 +21,7 @@ class InlineModeTests(unittest.TestCase):
         self.assertEqual(results[0].id, "meme:7")
         self.assertEqual(results[0].title, "Тестовый мем")
         self.assertEqual(results[0].video_file_id, "video_file_id")
-        self.assertIn("Просмотров: 12", results[0].description)
+        self.assertIn("👁️ 12", results[0].description)
         self.assertIn("Тестовый мем", results[0].caption)
         self.assertIn("Просмотров: 12", results[0].caption)
         self.assertTrue(results[0].caption.endswith(BOT_WATERMARK))

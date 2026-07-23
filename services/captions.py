@@ -7,6 +7,7 @@ def build_video_caption(
     *,
     title: str | None = None,
     views: int | None = None,
+    likes: int | None = None,
     author_username: str | None = None,
     show_details: bool = True,
     header: str | None = None,
@@ -19,6 +20,8 @@ def build_video_caption(
             parts.append(header)
         if title:
             parts.append(f'🎬 <b>{title}</b>')
+        if likes is not None:
+            parts.append(f'❤️ Лайков: {likes}')
         if views is not None:
             parts.append(f'👁️ Просмотров: {views}')
         if author_username:
