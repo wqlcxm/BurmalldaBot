@@ -3,6 +3,8 @@ from pathlib import Path
 from aiogram.types import User
 import aiosqlite
 
+from database.migrations import run_migrations
+
 DB_DIR = Path(__file__).resolve().parent
 DEFAULT_DB = 'memes_old.db'
 LEGACY_DB = 'memes.db'
@@ -32,82 +34,11 @@ def format_username(username: str | None) -> str:
 
 
 async def init_db():
+    """Создаёт недостающие таблицы/колонки через миграции, не трогая данные."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS memes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                file_id TEXT NOT NULL,
-                sender_id INTEGER DEFAULT 0,
-                sender_username TEXT DEFAULT '@anon',
-                views INTEGER NOT NULL DEFAULT 0
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS banned_users (
-                user_id INTEGER PRIMARY KEY
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT NOT NULL,
-                score INTEGER NOT NULL DEFAULT 0
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS bot_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        ''')
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS maintenance_allowed_users (
-                user_id INTEGER PRIMARY KEY
-            )
-        ''')
-        await db.commit()
-
-        await db.execute("""
-            UPDATE memes
-            SET sender_username = CASE
-                WHEN sender_username IS NULL OR TRIM(sender_username) = '' THEN '@anon'
-                WHEN sender_username LIKE '@%' THEN sender_username
-                ELSE '@' || TRIM(sender_username)
-            END
-            WHERE sender_username IS NOT NULL OR sender_username IS NULL
-        """)
-        await db.execute("""
-            UPDATE users
-            SET username = CASE
-                WHEN username IS NULL OR TRIM(username) = '' THEN '@anon'
-                WHEN username LIKE '@%' THEN username
-                ELSE '@' || TRIM(username)
-            END
-            WHERE username IS NOT NULL OR username IS NULL
-        """)
-        await db.commit()
-
-        try:
-            await db.execute('ALTER TABLE memes ADD COLUMN sender_id INTEGER DEFAULT 0')
-            await db.commit()
-            print('Колонка sender_id успешно добавлена в старую БД.')
-        except aiosqlite.OperationalError:
-            pass
-
-        try:
-            await db.execute("ALTER TABLE memes ADD COLUMN sender_username TEXT DEFAULT '@anon'")
-            await db.commit()
-            print('Колонка sender_username успешно добавлена в старую БД.')
-        except aiosqlite.OperationalError:
-            pass
-
-        try:
-            await db.execute("ALTER TABLE memes ADD COLUMN views INTEGER NOT NULL DEFAULT 0")
-            await db.commit()
-            print('Колонка views успешно добавлена в старую БД.')
-        except aiosqlite.OperationalError:
-            pass
+        applied = await run_migrations(db)
+        for migration_id in applied:
+            print(f'Применена миграция: {migration_id}')
 
 
 async def ban_user(user_id: int):
@@ -197,6 +128,41 @@ async def is_inline_description_enabled() -> bool:
 async def set_inline_description_enabled(enabled: bool) -> None:
     """Включает или отключает описание под результатами inline-запроса."""
     await set_bot_setting('inline_description_enabled', '1' if enabled else '0')
+
+
+async def is_show_username_enabled(user_id: int) -> bool:
+    """Проверяет, разрешил ли пользователь показывать свой username на мемах."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT show_username FROM users WHERE user_id = ?',
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row is None:
+                return True
+            return row[0] != 0
+
+
+async def set_show_username_enabled(user_id: int, enabled: bool) -> None:
+    """Включает или отключает показ username пользователя на его мемах."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            '''INSERT INTO users (user_id, username, score, show_username) VALUES (?, '@anon', 0, ?)
+               ON CONFLICT(user_id) DO UPDATE SET show_username = excluded.show_username''',
+            (user_id, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
+async def get_visible_meme_author(meme: dict) -> str | None:
+    """Возвращает username автора мема, если он разрешил показ, иначе None."""
+    sender_username = meme.get('sender_username')
+    sender_id = meme.get('sender_id') or 0
+    if not sender_username or normalize_username(sender_username) == '@anon':
+        return None
+    if sender_id and not await is_show_username_enabled(sender_id):
+        return None
+    return sender_username
 
 
 async def get_allowed_users() -> list[int]:
@@ -331,6 +297,6 @@ async def get_random_meme() -> dict | None:
     """Возвращает случайный мем из базы данных."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT id, title, file_id, views FROM memes ORDER BY RANDOM() LIMIT 1') as cursor:
+        async with db.execute('SELECT * FROM memes ORDER BY RANDOM() LIMIT 1') as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None

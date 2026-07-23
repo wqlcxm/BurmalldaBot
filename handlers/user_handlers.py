@@ -37,8 +37,12 @@ from database.db_core import (
     get_top_memes,
     is_inline_description_enabled,
     set_inline_description_enabled,
+    is_show_username_enabled,
+    set_show_username_enabled,
+    get_visible_meme_author,
 )
 from config_data.config import load_config
+from services.captions import build_video_caption
 
 router = Router()
 config = load_config()
@@ -53,13 +57,18 @@ def build_inline_query_results(
         title = meme.get('title') or 'Без названия'
         views = meme.get('views', 0)
         description = f"👁️ Просмотров: {views}" if show_description else ''
+        caption = build_video_caption(
+            title=title,
+            views=views,
+            show_details=show_description,
+        )
         results.append(
             InlineQueryResultCachedVideo(
                 id=f"meme:{meme['id']}",
                 video_file_id=meme['file_id'],
                 title=title,
                 description=description,
-                caption=f"🎬 <b>{title}</b>\n\n👁️ Просмотров: {views}",
+                caption=caption,
                 parse_mode='HTML',
             )
         )
@@ -119,20 +128,45 @@ async def process_toggle_inline_description(callback: CallbackQuery):
     enabled = await is_inline_description_enabled()
     await set_inline_description_enabled(not enabled)
 
-    new_enabled = await is_inline_description_enabled()
+    caption_enabled = await is_inline_description_enabled()
+    username_enabled = await is_show_username_enabled(callback.from_user.id)
     await callback.message.edit_text(
-        text=LEXICON['settings_text'].format(status='включено' if new_enabled else 'выключено'),
-        reply_markup=create_settings_keyboard(new_enabled)
+        text=LEXICON['settings_text'].format(
+            caption_status='включено' if caption_enabled else 'выключено',
+            username_status='включено' if username_enabled else 'выключено',
+        ),
+        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
+    )
+    await callback.answer('Настройки обновлены')
+
+
+@router.callback_query(F.data == 'toggle_show_username')
+async def process_toggle_show_username(callback: CallbackQuery):
+    enabled = await is_show_username_enabled(callback.from_user.id)
+    await set_show_username_enabled(callback.from_user.id, not enabled)
+
+    caption_enabled = await is_inline_description_enabled()
+    username_enabled = await is_show_username_enabled(callback.from_user.id)
+    await callback.message.edit_text(
+        text=LEXICON['settings_text'].format(
+            caption_status='включено' if caption_enabled else 'выключено',
+            username_status='включено' if username_enabled else 'выключено',
+        ),
+        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
     )
     await callback.answer('Настройки обновлены')
 
 
 @router.message(F.text == LEXICON['settings_button'])
 async def process_settings_request(message: Message):
-    enabled = await is_inline_description_enabled()
+    caption_enabled = await is_inline_description_enabled()
+    username_enabled = await is_show_username_enabled(message.from_user.id)
     await message.answer(
-        text=LEXICON['settings_text'].format(status='включено' if enabled else 'выключено'),
-        reply_markup=create_settings_keyboard(enabled)
+        text=LEXICON['settings_text'].format(
+            caption_status='включено' if caption_enabled else 'выключено',
+            username_status='включено' if username_enabled else 'выключено',
+        ),
+        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
     )
 
 
@@ -165,13 +199,18 @@ async def process_meme_click(callback: CallbackQuery):
         return
     await increment_meme_views(meme_id)
     updated_meme = await get_meme_by_id(meme_id)
+    author = await get_visible_meme_author(updated_meme)
     await callback.answer()
     try:
         chat_id = callback.message.chat.id if callback.message else callback.from_user.id
         await callback.bot.send_video(
             chat_id=chat_id,
             video=updated_meme['file_id'],
-            caption=f"🎬 <b>{updated_meme['title']}</b>\n\n👁️ Просмотров: {updated_meme.get('views', 0)}"
+            caption=build_video_caption(
+                title=updated_meme['title'],
+                views=updated_meme.get('views', 0),
+                author_username=author,
+            ),
         )
     except TelegramBadRequest as exc:
         if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():
@@ -357,11 +396,17 @@ async def process_random_meme_command(message: Message):
         
     await increment_meme_views(meme['id'])
     updated_meme = await get_meme_by_id(meme['id'])
+    author = await get_visible_meme_author(updated_meme)
 
     try:
         await message.answer_video(
             video=updated_meme['file_id'],
-            caption=f"🎲 Твой случайный мем дня:\n<b>{updated_meme['title']}</b>\n\n👁️ Просмотров: {updated_meme.get('views', 0)}"
+            caption=build_video_caption(
+                title=updated_meme['title'],
+                views=updated_meme.get('views', 0),
+                author_username=author,
+                header='🎲 Твой случайный мем дня:',
+            ),
         )
     except TelegramBadRequest as exc:
         if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():
