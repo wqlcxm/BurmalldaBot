@@ -22,7 +22,8 @@ LEXICON: dict[str, str] = {
     'settings_text': (
         '⚙️ Настройки\n\n'
         'Подпись под видео в inline-режиме: {caption_status}\n'
-        'Показ моего username на мемах в боте: {username_status}'
+        'Показ моего username на мемах в боте: {username_status}\n'
+        'Показ меня в топе статистики: {top_status}'
     ),
     'about_text': '🤖 Самое лучшее изобретение человечества\n\n- Получить мем: нажми "🎲 Получить мем"\n- Добавить мем: /addmeme или нажми "➕ Добавить мем"\n- Статистика: "📊 Статистика"\n\nЕсли есть вопросы или проблемы, пиши @heresy01\nПоддержать автора - https://www.donationalerts.com/r/mayhemkk1'
 }

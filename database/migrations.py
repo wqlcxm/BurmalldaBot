@@ -102,11 +102,32 @@ async def migration_004_users_show_username(db: aiosqlite.Connection) -> None:
     )
 
 
+async def migration_005_users_show_in_top(db: aiosqlite.Connection) -> None:
+    await _ensure_column(
+        db,
+        'users',
+        'show_in_top',
+        'show_in_top INTEGER NOT NULL DEFAULT 1',
+    )
+
+
+async def migration_006_meme_likes(db: aiosqlite.Connection) -> None:
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS meme_likes (
+            user_id INTEGER NOT NULL,
+            meme_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, meme_id)
+        )
+    ''')
+
+
 MIGRATIONS: list[tuple[str, MigrationFunc]] = [
     ('001_base_tables', migration_001_base_tables),
     ('002_meme_columns', migration_002_meme_columns),
     ('003_normalize_usernames', migration_003_normalize_usernames),
     ('004_users_show_username', migration_004_users_show_username),
+    ('005_users_show_in_top', migration_005_users_show_in_top),
+    ('006_meme_likes', migration_006_meme_likes),
 ]
 
 

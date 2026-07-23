@@ -21,6 +21,7 @@ from keyboards.user_keyboards import (
     create_memes_inline_keyboard,
     create_cancel_menu,
     create_settings_keyboard,
+    create_meme_like_keyboard,
 )
 from keyboards.admin_keyboards import create_moderation_keyboard
 from database.db_core import (
@@ -39,13 +40,37 @@ from database.db_core import (
     set_inline_description_enabled,
     is_show_username_enabled,
     set_show_username_enabled,
+    is_show_in_top_enabled,
+    set_show_in_top_enabled,
     get_visible_meme_author,
+    get_meme_likes_count,
+    has_user_liked_meme,
+    get_user_liked_meme_ids,
+    toggle_meme_like,
+    sort_memes_for_inline,
 )
 from config_data.config import load_config
 from services.captions import build_video_caption
 
 router = Router()
 config = load_config()
+
+
+def _status_text(enabled: bool) -> str:
+    return 'включено' if enabled else 'выключено'
+
+
+async def _render_settings(user_id: int) -> tuple[str, object]:
+    caption_enabled = await is_inline_description_enabled()
+    username_enabled = await is_show_username_enabled(user_id)
+    top_enabled = await is_show_in_top_enabled(user_id)
+    text = LEXICON['settings_text'].format(
+        caption_status=_status_text(caption_enabled),
+        username_status=_status_text(username_enabled),
+        top_status=_status_text(top_enabled),
+    )
+    keyboard = create_settings_keyboard(caption_enabled, username_enabled, top_enabled)
+    return text, keyboard
 
 
 def build_inline_query_results(
@@ -84,6 +109,7 @@ class AddMemeState(StatesGroup):
 async def process_inline_query(query: InlineQuery):
     search_text = (query.query or '').strip().lower()
     memes = await get_all_memes()
+    liked_ids = await get_user_liked_meme_ids(query.from_user.id)
 
     if search_text:
         filtered_memes = [
@@ -91,7 +117,10 @@ async def process_inline_query(query: InlineQuery):
             if search_text in (meme.get('title') or '').lower()
         ]
     else:
-        filtered_memes = sorted(memes, key=lambda meme: meme.get('views', 0), reverse=True)
+        filtered_memes = list(memes)
+
+    # Лайкнутые сверху, внутри групп — по убыванию просмотров.
+    filtered_memes = sort_memes_for_inline(filtered_memes, liked_ids)
 
     if filtered_memes:
         show_description = await is_inline_description_enabled()
@@ -107,7 +136,8 @@ async def process_inline_query(query: InlineQuery):
             )
         ]
 
-    await query.answer(results=results, cache_time=0, is_personal=False)
+    # is_personal=True: у каждого пользователя свой порядок (его лайки сверху).
+    await query.answer(results=results, cache_time=0, is_personal=True)
 
 
 @router.chosen_inline_result()
@@ -128,15 +158,8 @@ async def process_toggle_inline_description(callback: CallbackQuery):
     enabled = await is_inline_description_enabled()
     await set_inline_description_enabled(not enabled)
 
-    caption_enabled = await is_inline_description_enabled()
-    username_enabled = await is_show_username_enabled(callback.from_user.id)
-    await callback.message.edit_text(
-        text=LEXICON['settings_text'].format(
-            caption_status='включено' if caption_enabled else 'выключено',
-            username_status='включено' if username_enabled else 'выключено',
-        ),
-        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
-    )
+    text, keyboard = await _render_settings(callback.from_user.id)
+    await callback.message.edit_text(text=text, reply_markup=keyboard)
     await callback.answer('Настройки обновлены')
 
 
@@ -145,29 +168,25 @@ async def process_toggle_show_username(callback: CallbackQuery):
     enabled = await is_show_username_enabled(callback.from_user.id)
     await set_show_username_enabled(callback.from_user.id, not enabled)
 
-    caption_enabled = await is_inline_description_enabled()
-    username_enabled = await is_show_username_enabled(callback.from_user.id)
-    await callback.message.edit_text(
-        text=LEXICON['settings_text'].format(
-            caption_status='включено' if caption_enabled else 'выключено',
-            username_status='включено' if username_enabled else 'выключено',
-        ),
-        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
-    )
+    text, keyboard = await _render_settings(callback.from_user.id)
+    await callback.message.edit_text(text=text, reply_markup=keyboard)
+    await callback.answer('Настройки обновлены')
+
+
+@router.callback_query(F.data == 'toggle_show_in_top')
+async def process_toggle_show_in_top(callback: CallbackQuery):
+    enabled = await is_show_in_top_enabled(callback.from_user.id)
+    await set_show_in_top_enabled(callback.from_user.id, not enabled)
+
+    text, keyboard = await _render_settings(callback.from_user.id)
+    await callback.message.edit_text(text=text, reply_markup=keyboard)
     await callback.answer('Настройки обновлены')
 
 
 @router.message(F.text == LEXICON['settings_button'])
 async def process_settings_request(message: Message):
-    caption_enabled = await is_inline_description_enabled()
-    username_enabled = await is_show_username_enabled(message.from_user.id)
-    await message.answer(
-        text=LEXICON['settings_text'].format(
-            caption_status='включено' if caption_enabled else 'выключено',
-            username_status='включено' if username_enabled else 'выключено',
-        ),
-        reply_markup=create_settings_keyboard(caption_enabled, username_enabled),
-    )
+    text, keyboard = await _render_settings(message.from_user.id)
+    await message.answer(text=text, reply_markup=keyboard)
 
 
 @router.message(CommandStart())
@@ -200,6 +219,8 @@ async def process_meme_click(callback: CallbackQuery):
     await increment_meme_views(meme_id)
     updated_meme = await get_meme_by_id(meme_id)
     author = await get_visible_meme_author(updated_meme)
+    likes_count = await get_meme_likes_count(meme_id)
+    liked = await has_user_liked_meme(callback.from_user.id, meme_id)
     await callback.answer()
     try:
         chat_id = callback.message.chat.id if callback.message else callback.from_user.id
@@ -211,6 +232,7 @@ async def process_meme_click(callback: CallbackQuery):
                 views=updated_meme.get('views', 0),
                 author_username=author,
             ),
+            reply_markup=create_meme_like_keyboard(meme_id, likes_count, liked),
         )
     except TelegramBadRequest as exc:
         if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():
@@ -228,6 +250,30 @@ async def process_meme_click(callback: CallbackQuery):
             await callback.message.answer(text=LEXICON['error'])
         else:
             await callback.bot.send_message(chat_id=callback.from_user.id, text=LEXICON['error'])
+
+
+@router.callback_query(F.data.startswith('like_meme_'))
+async def process_like_meme(callback: CallbackQuery):
+    try:
+        meme_id = int(callback.data.split('_')[2])
+    except (IndexError, ValueError):
+        await callback.answer('Не удалось обработать лайк', show_alert=True)
+        return
+
+    meme = await get_meme_by_id(meme_id)
+    if not meme:
+        await callback.answer(LEXICON['not_found'], show_alert=True)
+        return
+
+    liked, likes_count = await toggle_meme_like(callback.from_user.id, meme_id)
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=create_meme_like_keyboard(meme_id, likes_count, liked),
+        )
+    except TelegramBadRequest:
+        pass
+
+    await callback.answer('❤️' if liked else 'Лайк убран')
 
 # --- ПОШАГОВОЕ ДОБАВЛЕНИЕ МЕМА НА МОДЕРАЦИЮ ---
 
@@ -397,6 +443,8 @@ async def process_random_meme_command(message: Message):
     await increment_meme_views(meme['id'])
     updated_meme = await get_meme_by_id(meme['id'])
     author = await get_visible_meme_author(updated_meme)
+    likes_count = await get_meme_likes_count(updated_meme['id'])
+    liked = await has_user_liked_meme(message.from_user.id, updated_meme['id'])
 
     try:
         await message.answer_video(
@@ -407,6 +455,7 @@ async def process_random_meme_command(message: Message):
                 author_username=author,
                 header='🎲 Твой случайный мем дня:',
             ),
+            reply_markup=create_meme_like_keyboard(updated_meme['id'], likes_count, liked),
         )
     except TelegramBadRequest as exc:
         if "wrong file_id" in str(exc).lower() or "temporarily unavailable" in str(exc).lower():

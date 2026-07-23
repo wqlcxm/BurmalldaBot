@@ -58,6 +58,21 @@ class MigrationsAndAuthorPrivacyTests(unittest.TestCase):
         author_visible = asyncio.run(db_core.get_visible_meme_author(meme))
         self.assertEqual(author_visible, '@alice')
 
+    def test_show_in_top_privacy(self) -> None:
+        asyncio.run(db_core.add_meme('file_1', 'Мем 1', sender_id=10, sender_username='@alice'))
+        asyncio.run(db_core.add_meme('file_2', 'Мем 2', sender_id=11, sender_username='@bob'))
+
+        top = asyncio.run(db_core.get_top_contributors())
+        self.assertEqual([user['sender_username'] for user in top], ['@alice', '@bob'])
+
+        asyncio.run(db_core.set_show_in_top_enabled(10, False))
+        top_hidden = asyncio.run(db_core.get_top_contributors())
+        self.assertEqual([user['sender_username'] for user in top_hidden], ['@bob'])
+
+        asyncio.run(db_core.set_show_in_top_enabled(10, True))
+        top_visible = asyncio.run(db_core.get_top_contributors())
+        self.assertEqual([user['sender_username'] for user in top_visible], ['@alice', '@bob'])
+
 
 class LiveDbResolveTests(unittest.TestCase):
     def setUp(self) -> None:

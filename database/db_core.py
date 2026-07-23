@@ -208,6 +208,30 @@ async def set_show_username_enabled(user_id: int, enabled: bool) -> None:
         await db.commit()
 
 
+async def is_show_in_top_enabled(user_id: int) -> bool:
+    """Проверяет, разрешил ли пользователь отображаться в топе статистики."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT show_in_top FROM users WHERE user_id = ?',
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row is None:
+                return True
+            return row[0] != 0
+
+
+async def set_show_in_top_enabled(user_id: int, enabled: bool) -> None:
+    """Включает или отключает отображение пользователя в топе статистики."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            '''INSERT INTO users (user_id, username, score, show_in_top) VALUES (?, '@anon', 0, ?)
+               ON CONFLICT(user_id) DO UPDATE SET show_in_top = excluded.show_in_top''',
+            (user_id, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
 async def get_visible_meme_author(meme: dict) -> str | None:
     """Возвращает username автора мема, если он разрешил показ, иначе None."""
     sender_username = meme.get('sender_username')
@@ -322,7 +346,7 @@ async def get_top_contributors() -> list[dict]:
         async with db.execute('''
             SELECT username AS sender_username, score AS meme_count
             FROM users
-            WHERE score > 0
+            WHERE score > 0 AND show_in_top != 0
             ORDER BY score DESC, username ASC
             LIMIT 10
         ''') as cursor:
@@ -354,3 +378,82 @@ async def get_random_meme() -> dict | None:
         async with db.execute('SELECT * FROM memes ORDER BY RANDOM() LIMIT 1') as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+
+async def get_meme_likes_count(meme_id: int) -> int:
+    """Возвращает число лайков у мема."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT COUNT(*) FROM meme_likes WHERE meme_id = ?',
+            (meme_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+
+
+async def has_user_liked_meme(user_id: int, meme_id: int) -> bool:
+    """Проверяет, лайкнул ли пользователь мем."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT 1 FROM meme_likes WHERE user_id = ? AND meme_id = ?',
+            (user_id, meme_id),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def get_user_liked_meme_ids(user_id: int) -> set[int]:
+    """Возвращает id мемов, которые лайкнул пользователь."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT meme_id FROM meme_likes WHERE user_id = ?',
+            (user_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {int(row[0]) for row in rows}
+
+
+async def toggle_meme_like(user_id: int, meme_id: int) -> tuple[bool, int]:
+    """Ставит или снимает лайк. Возвращает (сейчас_лайкнут, число_лайков)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT 1 FROM meme_likes WHERE user_id = ? AND meme_id = ?',
+            (user_id, meme_id),
+        ) as cursor:
+            already_liked = await cursor.fetchone() is not None
+
+        if already_liked:
+            await db.execute(
+                'DELETE FROM meme_likes WHERE user_id = ? AND meme_id = ?',
+                (user_id, meme_id),
+            )
+            liked = False
+        else:
+            await db.execute(
+                'INSERT OR IGNORE INTO meme_likes (user_id, meme_id) VALUES (?, ?)',
+                (user_id, meme_id),
+            )
+            liked = True
+
+        await db.commit()
+        async with db.execute(
+            'SELECT COUNT(*) FROM meme_likes WHERE meme_id = ?',
+            (meme_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            count = int(row[0]) if row else 0
+
+    return liked, count
+
+
+def sort_memes_for_inline(memes: list[dict], liked_ids: set[int] | None = None) -> list[dict]:
+    """Сначала лайкнутые пользователем, затем по убыванию просмотров."""
+    liked = liked_ids or set()
+    return sorted(
+        memes,
+        key=lambda meme: (
+            0 if meme.get('id') in liked else 1,
+            -int(meme.get('views') or 0),
+            int(meme.get('id') or 0),
+        ),
+    )
+

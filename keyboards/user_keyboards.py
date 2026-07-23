@@ -47,14 +47,20 @@ def create_memes_inline_keyboard(memes_list: list[dict]) -> InlineKeyboardMarkup
 def create_settings_keyboard(
     caption_enabled: bool,
     show_username_enabled: bool,
+    show_in_top_enabled: bool,
 ) -> InlineKeyboardMarkup:
-    """Генерирует клавиатуру настроек inline-подписи и показа username."""
+    """Генерирует клавиатуру персональных и inline-настроек."""
     builder = InlineKeyboardBuilder()
     caption_text = '✅ Отключить подпись' if caption_enabled else '🔄 Включить подпись'
     username_text = (
         '✅ Скрыть мой username'
         if show_username_enabled
         else '🔄 Показывать мой username'
+    )
+    top_text = (
+        '✅ Скрыть меня из топа'
+        if show_in_top_enabled
+        else '🔄 Показывать меня в топе'
     )
     builder.row(InlineKeyboardButton(
         text=caption_text,
@@ -63,5 +69,21 @@ def create_settings_keyboard(
     builder.row(InlineKeyboardButton(
         text=username_text,
         callback_data='toggle_show_username'
+    ))
+    builder.row(InlineKeyboardButton(
+        text=top_text,
+        callback_data='toggle_show_in_top'
+    ))
+    return builder.as_markup()
+
+
+def create_meme_like_keyboard(meme_id: int, likes_count: int = 0, liked: bool = False) -> InlineKeyboardMarkup:
+    """Кнопка лайка под мемом, отправленным в боте."""
+    heart = '❤️' if liked else '🤍'
+    count_text = f' {likes_count}' if likes_count else ''
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text=f'{heart}{count_text}',
+        callback_data=f'like_meme_{meme_id}',
     ))
     return builder.as_markup()
